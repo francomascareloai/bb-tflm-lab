@@ -1,0 +1,63 @@
+name: PR Tests
+on:
+  pull_request_target:
+    types:
+      - synchronize
+      - labeled
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gatekeeper:
+    runs-on: ubuntu-latest
+    outputs:
+      scope: ${{ steps.check-scope.outputs.scope }}
+      is_trusted: ${{ steps.check-scope.outputs.is_trusted }}
+    steps:
+      - name: check-scope
+        id: check-scope
+        run: |
+          # LAB: single-account lab => PR author is always treated UNTRUSTED
+          # (mirrors real target: external contributor resolves untrusted and
+          # falls into the 'integration-test' environment).
+          echo "is_trusted=false" >> $GITHUB_OUTPUT
+          labels='${{ join(github.event.pull_request.labels.*.name, ' ') }}'
+          label_ev='${{ github.event.label.name }}'
+          scope="none"
+          if echo "$labels" | grep -q "ci:full"; then scope="all"; fi
+          if [ "$label_ev" = "ci:full" ] && [ "${{ github.event.action }}" = "labeled" ]; then scope="all"; fi
+          echo "scope=$scope" >> $GITHUB_OUTPUT
+          {
+            echo "### gatekeeper [run ${{ github.run_id }} / attempt ${{ github.run_attempt }}]"
+            echo "- action: \`${{ github.event.action }}\`"
+            echo "- labels: \`$labels\` (event label: \`$label_ev\`)"
+            echo "- is_trusted: false (lab-fixed)"
+            echo "- scope: \`$scope\`"
+            echo "- PR head sha at event time: \`${{ github.event.pull_request.head.sha }}\`"
+          } >> $GITHUB_STEP_SUMMARY
+
+  approval-gate:
+    needs: gatekeeper
+    if: needs.gatekeeper.outputs.scope != 'none'
+    runs-on: ubuntu-latest
+    environment: ${{ needs.gatekeeper.outputs.is_trusted == 'false' && 'integration-test' || '' }}
+    steps:
+      - name: Authorize
+        run: |
+          echo "CI Authorized. [run ${{ github.run_id }} attempt ${{ github.run_attempt }}]"
+          {
+            echo "### approval-gate [run ${{ github.run_id }} / attempt ${{ github.run_attempt }}]"
+            echo "- environment: integration-test (protection rules were APPLIED)"
+            echo "- deployment url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          } >> $GITHUB_STEP_SUMMARY
+
+  call-consumer:
+    needs: [gatekeeper, approval-gate]
+    if: needs.gatekeeper.outputs.scope != 'none'
+    uses: ./.github/workflows/consumer.yml
+    with:
+      trigger-sha: ${{ github.event.pull_request.head.sha }}
+    secrets:
+      lab-token: ${{ secrets.TFLM_BOT_PACKAGE_READ_TOKEN }}

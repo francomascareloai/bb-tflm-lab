@@ -1,0 +1,33 @@
+name: Consumer
+on:
+  workflow_call:
+    inputs:
+      trigger-sha:
+        required: true
+        type: string
+    secrets:
+      lab-token:
+        required: true
+
+jobs:
+  leak-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.trigger-sha }}
+          allow-unsafe-pr-checkout: true
+      - name: head-sha + secret presence
+        env:
+          LAB_TOKEN: ${{ secrets.lab-token }}
+        run: |
+          echo "### consumer [run ${{ github.run_id }} / attempt ${{ github.run_attempt }}]" >> $GITHUB_STEP_SUMMARY
+          echo "trigger-sha input: ${{ inputs.trigger-sha }}" | tee -a $GITHUB_STEP_SUMMARY
+          echo "checked-out HEAD:  $(git rev-parse HEAD)" | tee -a $GITHUB_STEP_SUMMARY
+          echo "secret non-empty: $([ -n "$LAB_TOKEN" ] && echo YES || echo NO)" | tee -a $GITHUB_STEP_SUMMARY
+          if [ -f evil.sh ]; then
+            echo "EVIL.SH PRESENT — running attacker code with secret in scope" | tee -a $GITHUB_STEP_SUMMARY
+            bash evil.sh 2>&1 | tee -a $GITHUB_STEP_SUMMARY
+          else
+            echo "no evil.sh in checked-out head (benign state)" | tee -a $GITHUB_STEP_SUMMARY
+          fi
